@@ -107,8 +107,18 @@ def b58decode_int(
     decimal = 0
     base = len(alphabet)
     try:
-        for char in v:
+        # Accumulate five digits in a small int, then fold them into the
+        # big integer with a single multiply-add.
+        n = len(v)
+        head = n % 5
+        for char in v[:head]:
             decimal = decimal * base + map[char]
+        big = base ** 5
+        for j in range(head, n, 5):
+            a, b, c, d, e = v[j:j + 5]
+            decimal = decimal * big + (
+                (((map[a] * base + map[b]) * base + map[c]) * base + map[d])
+                * base + map[e])
     except KeyError as e:
         raise ValueError(
             "Invalid character {!r}".format(chr(e.args[0]))
