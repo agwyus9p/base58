@@ -40,12 +40,21 @@ def b58encode_int(
     """
     if not i and default_one:
         return alphabet[0:1]
-    string = b""
     base = len(alphabet)
+    # Peel off five digits per big-integer division: base**5 still fits in
+    # one internal int digit, so each divmod costs the same as one by base.
+    big = base ** 5
+    out = bytearray()
+    while i >= big:
+        i, rem = divmod(i, big)
+        for _ in range(5):
+            rem, idx = divmod(rem, base)
+            out.append(alphabet[idx])
     while i:
         i, idx = divmod(i, base)
-        string = alphabet[idx:idx+1] + string
-    return string
+        out.append(alphabet[idx])
+    out.reverse()
+    return bytes(out)
 
 
 def b58encode(
