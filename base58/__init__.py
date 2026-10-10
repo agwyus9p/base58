@@ -152,13 +152,16 @@ def _get_base58_decode_table(alphabet: bytes,
 @_cached
 def _get_base58_decode_steps(base: int,
                              steps: int) -> List[Tuple[int, int, int]]:
-    # (shift, mask, multiplier) for merging byte lanes of 2**steps bytes;
-    # step j joins lanes of h = 2**j bytes into lanes of 2 * h bytes
+    # (shift, mask, factor) for merging byte lanes of 2**steps bytes;
+    # step j joins lanes of h = 2**j bytes into lanes of 2 * h bytes.
+    # A lane holds hi * 256**h + lo and should become hi * base**h + lo,
+    # so subtracting hi * (256**h - base**h) merges it in place.
     out = []
     for j in range(steps):
         h = 1 << j
         lanes = (b'\0' * h + b'\xff' * h) * ((1 << steps) // (2 * h))
-        out.append((8 * h, int.from_bytes(lanes, 'big'), base ** h))
+        out.append((8 * h, int.from_bytes(lanes, 'big'),
+                    (1 << 8 * h) - base ** h))
     return out
 
 
@@ -191,9 +194,9 @@ def b58decode_int(
         # once; base < 256 so the merged value always fits its lane.
         decimal = int.from_bytes(digits, 'big')
         steps = (len(digits) - 1).bit_length()
-        for shift, mask, mul in _get_base58_decode_steps(len(alphabet),
-                                                         steps):
-            decimal = (decimal >> shift & mask) * mul + (decimal & mask)
+        for shift, mask, factor in _get_base58_decode_steps(len(alphabet),
+                                                            steps):
+            decimal -= (decimal >> shift & mask) * factor
         return decimal
 
     decimal = 0
@@ -244,8 +247,8 @@ def b58decode(
         steps = _get_base58_decode_steps.cache.get(key)
         if steps is None:
             steps = _get_base58_decode_steps(*key)
-        for shift, mask, mul in steps:
-            acc = (acc >> shift & mask) * mul + (acc & mask)
+        for shift, mask, factor in steps:
+            acc -= (acc >> shift & mask) * factor
 
     return acc.to_bytes(origlen - newlen + (acc.bit_length() + 7) // 8, 'big')
 
