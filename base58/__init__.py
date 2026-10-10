@@ -109,11 +109,12 @@ def _get_base58_decode_map(alphabet: bytes,
 def _get_base58_decode_table(alphabet: bytes,
                              autofix: bool) -> Tuple[bytes, Optional[bytes]]:
     # Valid characters and a bytes.translate table mapping each character
-    # to its digit value (None if some digit value does not fit in a byte)
+    # to its digit value and every invalid character to 255 (None if some
+    # digit value does not fit below 255)
     invmap = _get_base58_decode_map(alphabet, autofix=autofix)
-    if max(invmap.values(), default=0) > 255:
+    if max(invmap.values(), default=0) >= 255:
         return bytes(invmap), None
-    return bytes(invmap), bytes(invmap.get(c, 0) for c in range(256))
+    return bytes(invmap), bytes(invmap.get(c, 255) for c in range(256))
 
 
 def b58decode_int(
@@ -128,14 +129,18 @@ def b58decode_int(
     v = scrub_input(v)
 
     valid, table = _get_base58_decode_table(alphabet, autofix=autofix)
-    invalid = v.translate(None, valid)
-    if invalid:
-        raise ValueError("Invalid character {!r}".format(chr(invalid[0])))
     if table is None:
+        invalid = v.translate(None, valid)
+        if invalid:
+            raise ValueError("Invalid character {!r}".format(chr(invalid[0])))
         map = _get_base58_decode_map(alphabet, autofix=autofix)
         digits = [map[char] for char in v]
     else:
+        # Invalid characters translate to 255, which no digit uses
         digits = v.translate(table)
+        if 255 in digits:
+            bad = v[digits.index(255)]
+            raise ValueError("Invalid character {!r}".format(chr(bad)))
 
     decimal = 0
     base = len(alphabet)
