@@ -220,13 +220,32 @@ def b58decode(
     Decode a Base58 encoded string
     """
     v = v.rstrip()
-    v = scrub_input(v)
+    if isinstance(v, str):
+        v = v.encode('ascii')
 
     origlen = len(v)
     v = v.lstrip(alphabet[0:1])
     newlen = len(v)
 
-    acc = b58decode_int(v, alphabet=alphabet, autofix=autofix)
+    # Same lane merging as b58decode_int, inlined to save a call per decode
+    tables = _get_base58_decode_table.cache.get((alphabet, autofix))
+    if tables is None:
+        tables = _get_base58_decode_table(alphabet, autofix)
+    table = tables[1]
+    if table is None:
+        acc = b58decode_int(v, alphabet=alphabet, autofix=autofix)
+    else:
+        digits = v.translate(table)
+        if 255 in digits:
+            bad = v[digits.index(255)]
+            raise ValueError("Invalid character {!r}".format(chr(bad)))
+        acc = int.from_bytes(digits, 'big')
+        key = (len(alphabet), (len(digits) - 1).bit_length())
+        steps = _get_base58_decode_steps.cache.get(key)
+        if steps is None:
+            steps = _get_base58_decode_steps(*key)
+        for shift, mask, mul in steps:
+            acc = (acc >> shift & mask) * mul + (acc & mask)
 
     return acc.to_bytes(origlen - newlen + (acc.bit_length() + 7) // 8, 'big')
 
