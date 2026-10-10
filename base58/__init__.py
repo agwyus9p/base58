@@ -51,20 +51,18 @@ def b58encode_int(
     # Peel off five digits per big-integer division: base**5 still fits in
     # one internal int digit, so each divmod costs the same as one by base.
     # The five digits are emitted as one single digit and two digit pairs.
+    # The last group is zero padded; the padding is stripped at the end.
     big = base ** 5
     sq = base * base
     pairs = _get_base58_encode_pairs(alphabet)
     parts = []
-    while i >= big:
+    while i:
         i, rem = divmod(i, big)
         rem, lo = divmod(rem, sq)
         top, mid = divmod(rem, sq)
         parts += pairs[lo], pairs[mid], alphabet[top:top + 1]
-    while i:
-        i, idx = divmod(i, base)
-        parts.append(alphabet[idx:idx + 1])
     parts.reverse()
-    return b''.join(parts)
+    return b''.join(parts).lstrip(alphabet[0:1])
 
 
 def b58encode(
