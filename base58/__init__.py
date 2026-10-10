@@ -11,7 +11,8 @@ with the bitcoin network.
 
 from functools import lru_cache
 from hashlib import sha256
-from typing import Mapping, Union
+from itertools import product
+from typing import List, Mapping, Union
 
 __version__ = '2.1.1'
 
@@ -32,6 +33,12 @@ def scrub_input(v: Union[str, bytes]) -> bytes:
     return v
 
 
+@lru_cache()
+def _get_base58_encode_pairs(alphabet: bytes) -> List[bytes]:
+    # pairs[hi * base + lo] is the two character encoding of digits hi, lo
+    return list(map(bytes, product(alphabet, repeat=2)))
+
+
 def b58encode_int(
     i: int, default_one: bool = True, alphabet: bytes = BITCOIN_ALPHABET
 ) -> bytes:
@@ -43,18 +50,21 @@ def b58encode_int(
     base = len(alphabet)
     # Peel off five digits per big-integer division: base**5 still fits in
     # one internal int digit, so each divmod costs the same as one by base.
+    # The five digits are emitted as one single digit and two digit pairs.
     big = base ** 5
-    out = bytearray()
+    sq = base * base
+    pairs = _get_base58_encode_pairs(alphabet)
+    parts = []
     while i >= big:
         i, rem = divmod(i, big)
-        for _ in range(5):
-            rem, idx = divmod(rem, base)
-            out.append(alphabet[idx])
+        rem, lo = divmod(rem, sq)
+        top, mid = divmod(rem, sq)
+        parts += pairs[lo], pairs[mid], alphabet[top:top + 1]
     while i:
         i, idx = divmod(i, base)
-        out.append(alphabet[idx])
-    out.reverse()
-    return bytes(out)
+        parts.append(alphabet[idx:idx + 1])
+    parts.reverse()
+    return b''.join(parts)
 
 
 def b58encode(
