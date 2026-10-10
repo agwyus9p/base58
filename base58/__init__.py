@@ -12,7 +12,7 @@ with the bitcoin network.
 from functools import lru_cache
 from hashlib import sha256
 from itertools import product
-from typing import List, Mapping, Union
+from typing import List, Mapping, Optional, Tuple, Union
 
 __version__ = '2.1.1'
 
@@ -99,6 +99,17 @@ def _get_base58_decode_map(alphabet: bytes,
     return invmap
 
 
+@lru_cache()
+def _get_base58_decode_table(alphabet: bytes,
+                             autofix: bool) -> Tuple[bytes, Optional[bytes]]:
+    # Valid characters and a bytes.translate table mapping each character
+    # to its digit value (None if some digit value does not fit in a byte)
+    invmap = _get_base58_decode_map(alphabet, autofix=autofix)
+    if max(invmap.values(), default=0) > 255:
+        return bytes(invmap), None
+    return bytes(invmap), bytes(invmap.get(c, 0) for c in range(256))
+
+
 def b58decode_int(
     v: Union[str, bytes], alphabet: bytes = BITCOIN_ALPHABET, *,
     autofix: bool = False
@@ -110,27 +121,29 @@ def b58decode_int(
         v = v.rstrip()
     v = scrub_input(v)
 
-    map = _get_base58_decode_map(alphabet, autofix=autofix)
+    valid, table = _get_base58_decode_table(alphabet, autofix=autofix)
+    invalid = v.translate(None, valid)
+    if invalid:
+        raise ValueError("Invalid character {!r}".format(chr(invalid[0])))
+    if table is None:
+        map = _get_base58_decode_map(alphabet, autofix=autofix)
+        digits = [map[char] for char in v]
+    else:
+        digits = v.translate(table)
 
     decimal = 0
     base = len(alphabet)
-    try:
-        # Accumulate five digits in a small int, then fold them into the
-        # big integer with a single multiply-add.
-        n = len(v)
-        head = n % 5
-        for char in v[:head]:
-            decimal = decimal * base + map[char]
-        big = base ** 5
-        for j in range(head, n, 5):
-            a, b, c, d, e = v[j:j + 5]
-            decimal = decimal * big + (
-                (((map[a] * base + map[b]) * base + map[c]) * base + map[d])
-                * base + map[e])
-    except KeyError as e:
-        raise ValueError(
-            "Invalid character {!r}".format(chr(e.args[0]))
-        ) from None
+    # Accumulate five digits in a small int, then fold them into the
+    # big integer with a single multiply-add.
+    n = len(digits)
+    head = n % 5
+    for d in digits[:head]:
+        decimal = decimal * base + d
+    big = base ** 5
+    for j in range(head, n, 5):
+        a, b, c, d, e = digits[j:j + 5]
+        decimal = decimal * big + ((((a * base + b) * base + c) * base + d)
+                                   * base + e)
     return decimal
 
 
