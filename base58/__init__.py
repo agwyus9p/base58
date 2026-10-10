@@ -135,13 +135,13 @@ def b58decode_int(
     base = len(alphabet)
     # Accumulate five digits in a small int, then fold them into the
     # big integer with a single multiply-add.
-    n = len(digits)
-    head = n % 5
+    head = len(digits) % 5
     for d in digits[:head]:
         decimal = decimal * base + d
     big = base ** 5
-    for j in range(head, n, 5):
-        a, b, c, d, e = digits[j:j + 5]
+    # zip over one shared iterator yields consecutive groups of five
+    rest = iter(digits[head:])
+    for a, b, c, d, e in zip(rest, rest, rest, rest, rest):
         decimal = decimal * big + ((((a * base + b) * base + c) * base + d)
                                    * base + e)
     return decimal
