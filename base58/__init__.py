@@ -114,8 +114,8 @@ def b58encode(
     parts = []
     while i:
         i, rem = divmod(i, big)
-        hi, lo = divmod(rem, sq)
-        parts += pairs[lo], pairs[hi]
+        # rem is a small int: two operators are cheaper than a divmod call
+        parts += pairs[rem % sq], pairs[rem // sq]
     parts.reverse()
     zero = alphabet[0:1]
     return zero * (origlen - newlen) + b''.join(parts).lstrip(zero)
