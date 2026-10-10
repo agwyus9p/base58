@@ -62,6 +62,16 @@ def _get_base58_encode_pairs(alphabet: bytes) -> List[bytes]:
     return list(map(bytes, product(alphabet, repeat=2)))
 
 
+@_cached
+def _get_base58_encode_tables(
+    alphabet: bytes
+) -> Tuple[List[bytes], int, int, bytes]:
+    # Everything b58encode needs per alphabet: the digit pair table, the
+    # pair base (base**2), the divisor (base**4) and the zero character
+    sq = len(alphabet) ** 2
+    return _get_base58_encode_pairs(alphabet), sq, sq * sq, alphabet[0:1]
+
+
 def b58encode_int(
     i: int, default_one: bool = True, alphabet: bytes = BITCOIN_ALPHABET
 ) -> bytes:
@@ -105,19 +115,16 @@ def b58encode(
 
     # Same digit loop as b58encode_int with default_one=False, inlined to
     # save a call per encode
-    base = len(alphabet)
-    sq = base * base
-    big = sq * sq
-    pairs = _get_base58_encode_pairs.cache.get((alphabet,))
-    if pairs is None:
-        pairs = _get_base58_encode_pairs(alphabet)
+    tables = _get_base58_encode_tables.cache.get((alphabet,))
+    if tables is None:
+        tables = _get_base58_encode_tables(alphabet)
+    pairs, sq, big, zero = tables
     parts = []
     while i:
         i, rem = divmod(i, big)
         # rem is a small int: two operators are cheaper than a divmod call
         parts += pairs[rem % sq], pairs[rem // sq]
     parts.reverse()
-    zero = alphabet[0:1]
     return zero * (origlen - newlen) + b''.join(parts).lstrip(zero)
 
 
