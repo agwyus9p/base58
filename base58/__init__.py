@@ -52,6 +52,7 @@ def _cached(func):
             result = cache[args] = func(*args)
             return result
 
+    wrapper.cache = cache
     return wrapper
 
 
@@ -93,16 +94,31 @@ def b58encode(
     """
     Encode a string using Base58
     """
-    v = scrub_input(v)
+    if isinstance(v, str):
+        v = v.encode('ascii')
 
     origlen = len(v)
     v = v.lstrip(b'\0')
     newlen = len(v)
 
-    acc = int.from_bytes(v, byteorder='big')  # first byte is most significant
+    i = int.from_bytes(v, 'big')  # first byte is most significant
 
-    result = b58encode_int(acc, default_one=False, alphabet=alphabet)
-    return alphabet[0:1] * (origlen - newlen) + result
+    # Same digit loop as b58encode_int with default_one=False, inlined to
+    # save a call per encode
+    base = len(alphabet)
+    sq = base * base
+    big = sq * sq
+    pairs = _get_base58_encode_pairs.cache.get((alphabet,))
+    if pairs is None:
+        pairs = _get_base58_encode_pairs(alphabet)
+    parts = []
+    while i:
+        i, rem = divmod(i, big)
+        hi, lo = divmod(rem, sq)
+        parts += pairs[lo], pairs[hi]
+    parts.reverse()
+    zero = alphabet[0:1]
+    return zero * (origlen - newlen) + b''.join(parts).lstrip(zero)
 
 
 @_cached
