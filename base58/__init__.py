@@ -9,10 +9,16 @@ with the bitcoin network.
 # forum post by Gavin Andresen, so direct your praise to him.
 # This module adds shiny packaging and support for python3.
 
+from __future__ import annotations
+
 from functools import lru_cache
 from hashlib import sha256
 from itertools import product
-from typing import List, Mapping, Optional, Tuple, Union
+
+# typing is only needed by type checkers; importing it at runtime is costly
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from typing import List, Mapping, Optional, Tuple, Union
 
 __version__ = '2.1.1'
 
