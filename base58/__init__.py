@@ -133,6 +133,19 @@ def _get_base58_decode_table(alphabet: bytes,
     return bytes(invmap), bytes(invmap.get(c, 255) for c in range(256))
 
 
+@_cached
+def _get_base58_decode_steps(base: int,
+                             steps: int) -> List[Tuple[int, int, int]]:
+    # (shift, mask, multiplier) for merging byte lanes of 2**steps bytes;
+    # step j joins lanes of h = 2**j bytes into lanes of 2 * h bytes
+    out = []
+    for j in range(steps):
+        h = 1 << j
+        lanes = (b'\0' * h + b'\xff' * h) * ((1 << steps) // (2 * h))
+        out.append((8 * h, int.from_bytes(lanes, 'big'), base ** h))
+    return out
+
+
 def b58decode_int(
     v: Union[str, bytes], alphabet: bytes = BITCOIN_ALPHABET, *,
     autofix: bool = False
@@ -157,6 +170,15 @@ def b58decode_int(
         if 255 in digits:
             bad = v[digits.index(255)]
             raise ValueError("Invalid character {!r}".format(chr(bad)))
+        # Every digit sits in its own byte of one big integer. Each step
+        # merges neighbouring lanes, hi * base**h + lo, for all lanes at
+        # once; base < 256 so the merged value always fits its lane.
+        decimal = int.from_bytes(digits, 'big')
+        steps = (len(digits) - 1).bit_length()
+        for shift, mask, mul in _get_base58_decode_steps(len(alphabet),
+                                                         steps):
+            decimal = (decimal >> shift & mask) * mul + (decimal & mask)
+        return decimal
 
     decimal = 0
     base = len(alphabet)
