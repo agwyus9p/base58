@@ -11,7 +11,6 @@ with the bitcoin network.
 
 from __future__ import annotations
 
-from functools import lru_cache
 from hashlib import sha256
 from itertools import product
 
@@ -39,7 +38,24 @@ def scrub_input(v: Union[str, bytes]) -> bytes:
     return v
 
 
-@lru_cache()
+def _cached(func):
+    # Small memoiser for the alphabet tables. functools.lru_cache would
+    # import functools (and collections with it) when base58 is imported.
+    cache = {}
+
+    def wrapper(*args):
+        try:
+            return cache[args]
+        except KeyError:
+            if len(cache) >= 128:
+                cache.clear()
+            result = cache[args] = func(*args)
+            return result
+
+    return wrapper
+
+
+@_cached
 def _get_base58_encode_pairs(alphabet: bytes) -> List[bytes]:
     # pairs[hi * base + lo] is the two character encoding of digits hi, lo
     return list(map(bytes, product(alphabet, repeat=2)))
@@ -89,7 +105,7 @@ def b58encode(
     return alphabet[0:1] * (origlen - newlen) + result
 
 
-@lru_cache()
+@_cached
 def _get_base58_decode_map(alphabet: bytes,
                            autofix: bool) -> Mapping[int, int]:
     invmap = {char: index for index, char in enumerate(alphabet)}
@@ -105,13 +121,13 @@ def _get_base58_decode_map(alphabet: bytes,
     return invmap
 
 
-@lru_cache()
+@_cached
 def _get_base58_decode_table(alphabet: bytes,
                              autofix: bool) -> Tuple[bytes, Optional[bytes]]:
     # Valid characters and a bytes.translate table mapping each character
     # to its digit value and every invalid character to 255 (None if some
     # digit value does not fit below 255)
-    invmap = _get_base58_decode_map(alphabet, autofix=autofix)
+    invmap = _get_base58_decode_map(alphabet, autofix)
     if max(invmap.values(), default=0) >= 255:
         return bytes(invmap), None
     return bytes(invmap), bytes(invmap.get(c, 255) for c in range(256))
@@ -128,12 +144,12 @@ def b58decode_int(
         v = v.rstrip()
     v = scrub_input(v)
 
-    valid, table = _get_base58_decode_table(alphabet, autofix=autofix)
+    valid, table = _get_base58_decode_table(alphabet, autofix)
     if table is None:
         invalid = v.translate(None, valid)
         if invalid:
             raise ValueError("Invalid character {!r}".format(chr(invalid[0])))
-        map = _get_base58_decode_map(alphabet, autofix=autofix)
+        map = _get_base58_decode_map(alphabet, autofix)
         digits = [map[char] for char in v]
     else:
         # Invalid characters translate to 255, which no digit uses
