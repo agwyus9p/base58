@@ -54,19 +54,19 @@ def b58encode_int(
     if not i and default_one:
         return alphabet[0:1]
     base = len(alphabet)
-    # Peel off five digits per big-integer division: base**5 still fits in
-    # one internal int digit, so each divmod costs the same as one by base.
-    # The five digits are emitted as one single digit and two digit pairs.
+    # Peel off four digits per big-integer division: base**4 fits in one
+    # internal int digit, so each divmod costs the same as one by base.
+    # The four digits split evenly into two digit pairs, so each group
+    # needs only one more small divmod and two table lookups.
     # The last group is zero padded; the padding is stripped at the end.
-    big = base ** 5
     sq = base * base
+    big = sq * sq
     pairs = _get_base58_encode_pairs(alphabet)
     parts = []
     while i:
         i, rem = divmod(i, big)
-        rem, lo = divmod(rem, sq)
-        top, mid = divmod(rem, sq)
-        parts += pairs[lo], pairs[mid], alphabet[top:top + 1]
+        hi, lo = divmod(rem, sq)
+        parts += pairs[lo], pairs[hi]
     parts.reverse()
     return b''.join(parts).lstrip(alphabet[0:1])
 
