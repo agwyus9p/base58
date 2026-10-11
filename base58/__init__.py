@@ -58,8 +58,20 @@ def _cached(func):
 
 @_cached
 def _get_base58_encode_pairs(alphabet: bytes) -> List[bytes]:
-    # pairs[hi * base + lo] is the two character encoding of digits hi, lo
-    return list(map(bytes, product(alphabet, repeat=2)))
+    # pairs[hi * base + lo] is the two character encoding of digits hi, lo.
+    # All pairs are laid out in one string, each followed by a byte that is
+    # not in the alphabet, so a single split cuts out every pair at once.
+    base = len(alphabet)
+    unused = set(range(256)).difference(alphabet)
+    if not base or not unused:
+        return list(map(bytes, product(alphabet, repeat=2)))
+    sep = bytes((min(unused),))
+    count = base * base
+    buf = bytearray(3 * count)
+    buf[0::3] = b''.join([alphabet[d:d + 1] * base for d in range(base)])
+    buf[1::3] = alphabet * base
+    buf[2::3] = sep * count
+    return bytes(buf[:-1]).split(sep)
 
 
 @_cached
