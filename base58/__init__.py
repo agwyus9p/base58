@@ -121,9 +121,13 @@ def b58encode(
     pairs, sq, big, zero = tables
     parts = []
     while i:
+        # Two groups of four digits per pass; a group past the top of i
+        # is all zero digits, which the lstrip below removes
         i, rem = divmod(i, big)
+        i, rem2 = divmod(i, big)
         # rem is a small int: two operators are cheaper than a divmod call
-        parts += pairs[rem % sq], pairs[rem // sq]
+        parts += (pairs[rem % sq], pairs[rem // sq],
+                  pairs[rem2 % sq], pairs[rem2 // sq])
     parts.reverse()
     return zero * (origlen - newlen) + b''.join(parts).lstrip(zero)
 
