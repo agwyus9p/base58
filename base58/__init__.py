@@ -65,11 +65,14 @@ def _get_base58_encode_pairs(alphabet: bytes) -> List[bytes]:
 @_cached
 def _get_base58_encode_tables(
     alphabet: bytes
-) -> Tuple[List[bytes], int, int, bytes]:
+) -> Tuple[List[bytes], int, int, int, bytes]:
     # Everything b58encode needs per alphabet: the digit pair table, the
-    # pair base (base**2), the divisor (base**4) and the zero character
+    # pair base (base**2), the divisor (base**4), base**12 and the zero
+    # character
     sq = len(alphabet) ** 2
-    return _get_base58_encode_pairs(alphabet), sq, sq * sq, alphabet[0:1]
+    big = sq * sq
+    return (_get_base58_encode_pairs(alphabet), sq, big, big ** 3,
+            alphabet[0:1])
 
 
 def b58encode_int(
@@ -118,11 +121,10 @@ def b58encode(
     tables = _get_base58_encode_tables.cache.get((alphabet,))
     if tables is None:
         tables = _get_base58_encode_tables(alphabet)
-    pairs, sq, big, zero = tables
+    pairs, sq, big, big3, zero = tables
     parts = []
-    while i:
-        # Four groups of four digits per pass; a group past the top of i
-        # is all zero digits, which the lstrip below removes
+    while i >= big3:
+        # Four groups of four digits per pass while at least four remain
         i, rem = divmod(i, big)
         i, rem2 = divmod(i, big)
         i, rem3 = divmod(i, big)
@@ -132,6 +134,11 @@ def b58encode(
                   pairs[rem2 % sq], pairs[rem2 // sq],
                   pairs[rem3 % sq], pairs[rem3 // sq],
                   pairs[rem4 % sq], pairs[rem4 // sq])
+    while i:
+        # Remaining groups one at a time; zero digits at the top of the
+        # last group are removed by the lstrip below
+        i, rem = divmod(i, big)
+        parts += pairs[rem % sq], pairs[rem // sq]
     parts.reverse()
     return zero * (origlen - newlen) + b''.join(parts).lstrip(zero)
 
