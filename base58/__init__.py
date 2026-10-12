@@ -98,12 +98,30 @@ def b58decode_int(
     decimal = 0
     base = len(alphabet)
     try:
-        for char in v:
-            decimal = decimal * base + map[char]
+        if len(v) < 128:
+            for char in v:
+                decimal = decimal * base + map[char]
+            return decimal
+        digits = [map[char] for char in v]
     except KeyError as e:
         raise ValueError(
             "Invalid character {!r}".format(chr(e.args[0]))
         ) from None
+
+    # For long inputs, accumulate chunks of digits in small ints first, so
+    # the big integer is only multiplied once per chunk instead of per digit.
+    chunk = 10
+    chunk_base = base ** chunk
+    head = len(digits) % chunk
+    part = 0
+    for d in digits[:head]:
+        part = part * base + d
+    decimal = part
+    for start in range(head, len(digits), chunk):
+        part = 0
+        for d in digits[start:start + chunk]:
+            part = part * base + d
+        decimal = decimal * chunk_base + part
     return decimal
 
 
