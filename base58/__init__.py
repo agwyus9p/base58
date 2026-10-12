@@ -11,6 +11,7 @@ with the bitcoin network.
 
 from functools import lru_cache
 from hashlib import sha256
+from struct import unpack
 from typing import Mapping, Union
 
 __version__ = '2.1.1'
@@ -123,6 +124,8 @@ def b58decode_int(
 
     decimal = 0
     base = len(alphabet)
+    if len(v) >= 128 and base < 255:
+        return _b58decode_int_long(v, alphabet, autofix, base)
     try:
         if len(v) < 128:
             for char in v:
@@ -134,15 +137,53 @@ def b58decode_int(
             "Invalid character {!r}".format(chr(e.args[0]))
         ) from None
 
-    # For long inputs, combine neighbouring values pairwise. Each pass halves
-    # the number of values and squares the weight of the left value, so the
-    # big multiplications stay balanced instead of growing one digit at a time.
     # The first pass folds five digits at a time; base ** 5 is still small.
     digits[:0] = [0] * (-len(digits) % 5)  # leading zeros do not change value
     groups = iter(digits)
     digits = [(((a * base + b) * base + c) * base + d) * base + e
               for a, b, c, d, e in zip(groups, groups, groups, groups, groups)]
-    level_base = base ** 5
+    return _b58combine(digits, base ** 5)
+
+
+@lru_cache()
+def _get_base58_decode_table(alphabet: bytes, autofix: bool) -> bytes:
+    # 256-entry translation table; 255 marks an invalid character.
+    invmap = _get_base58_decode_map(alphabet, autofix)
+    return bytes(invmap.get(c, 255) for c in range(256))
+
+
+def _b58decode_int_long(
+    v: bytes, alphabet: bytes, autofix: bool, base: int
+) -> int:
+    digits = v.translate(_get_base58_decode_table(alphabet, autofix))
+    bad = digits.find(b'\xff')
+    if bad >= 0:
+        raise ValueError("Invalid character {!r}".format(chr(v[bad])))
+
+    # Load one digit per byte into a single integer and merge neighbouring
+    # lanes in parallel: 8-bit lanes into 16, 32 and finally 64-bit lanes
+    # holding 8 digits each. base ** k < 256 ** k, so lanes never overflow.
+    digits = b'\0' * (-len(digits) % 8) + digits  # leading zeros are no-ops
+    size = len(digits)
+    acc = int.from_bytes(digits, 'big')
+    width = 8
+    weight = base
+    while width < 64:
+        nbytes = width // 8
+        mask = int.from_bytes(
+            (b'\0' * nbytes + b'\xff' * nbytes) * (size // (2 * nbytes)),
+            'big')
+        acc = ((acc >> width) & mask) * weight + (acc & mask)
+        width *= 2
+        weight *= weight
+    chunks = list(unpack('>%dQ' % (size // 8), acc.to_bytes(size, 'big')))
+    return _b58combine(chunks, weight)
+
+
+def _b58combine(digits: list, level_base: int) -> int:
+    # Combine neighbouring values pairwise. Each pass halves the number of
+    # values and squares the weight of the left value, so the big
+    # multiplications stay balanced instead of growing one digit at a time.
     while len(digits) > 1:
         if len(digits) % 2:
             digits.insert(0, 0)  # a leading zero digit does not change value
