@@ -146,11 +146,17 @@ def b58encode(
                   pairs[rem2 % sq], pairs[rem2 // sq],
                   pairs[rem3 % sq], pairs[rem3 // sq],
                   pairs[rem4 % sq], pairs[rem4 // sq])
-    while i:
-        # Remaining groups one at a time; zero digits at the top of the
-        # last group are removed by the lstrip below
+    if i >= big:
+        # Now base**4 <= i < base**12: two or three groups remain, take
+        # them without a loop. Zero digits at the top of the last group
+        # are removed by the lstrip below.
         i, rem = divmod(i, big)
-        parts += pairs[rem % sq], pairs[rem // sq]
+        rem3, rem2 = divmod(i, big)
+        parts += (pairs[rem % sq], pairs[rem // sq],
+                  pairs[rem2 % sq], pairs[rem2 // sq],
+                  pairs[rem3 % sq], pairs[rem3 // sq])
+    elif i:
+        parts += pairs[i % sq], pairs[i // sq]
     parts.reverse()
     return zero * (origlen - newlen) + b''.join(parts).lstrip(zero)
 
