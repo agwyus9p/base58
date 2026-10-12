@@ -218,18 +218,19 @@ def _get_base58_decode_merge(base: int,
     return out[:-1], shift, factor
 
 
-@_cached
 def _get_base58_decode_plan(alphabet: bytes, autofix: bool):
-    # The translate table and the merge plans for inputs of up to 2**11
-    # digits, indexed by (len(digits) - 1).bit_length()
+    # The zero character, the translate table and slots for the merge
+    # plans of inputs of up to 2**11 digits, indexed by
+    # (len(digits) - 1).bit_length() and filled in on first use
+    zero = alphabet[0:1]
     table = _get_base58_decode_table(alphabet, autofix)[1]
-    if table is None:
-        return None, []
-    base = len(alphabet)
-    return table, [_get_base58_decode_merge(base, s) for s in range(12)]
+    return zero, table, [None] * 12
 
 
-_decode_plans = _get_base58_decode_plan.cache
+# Decode plans by alphabet, one dict for each autofix setting, so a decode
+# call needs no tuple key
+_decode_plans = {}
+_decode_plans_autofix = {}
 
 
 def b58decode_int(
@@ -293,15 +294,18 @@ def b58decode(
     if isinstance(v, str):
         v = v.encode('ascii')
 
-    origlen = len(v)
-    v = v.lstrip(alphabet[0:1])
-    newlen = len(v)
-
     # Same lane merging as b58decode_int, inlined to save a call per decode
-    plan = _decode_plans.get((alphabet, autofix))
+    plans = _decode_plans_autofix if autofix else _decode_plans
+    plan = plans.get(alphabet)
     if plan is None:
-        plan = _get_base58_decode_plan(alphabet, autofix)
-    table, merges = plan
+        if len(plans) >= 128:
+            plans.clear()
+        plan = plans[alphabet] = _get_base58_decode_plan(alphabet, autofix)
+    zero, table, merges = plan
+
+    origlen = len(v)
+    v = v.lstrip(zero)
+    newlen = len(v)
     if table is None:
         acc = b58decode_int(v, alphabet=alphabet, autofix=autofix)
     else:
@@ -312,10 +316,13 @@ def b58decode(
         acc = int.from_bytes(digits, 'big')
         bits = (len(digits) - 1).bit_length()
         if bits < 12:
-            steps, last_shift, last_factor = merges[bits]
+            merge = merges[bits]
+            if merge is None:
+                merge = merges[bits] = _get_base58_decode_merge(
+                    len(alphabet), bits)
         else:
-            steps, last_shift, last_factor = _get_base58_decode_merge(
-                len(alphabet), bits)
+            merge = _get_base58_decode_merge(len(alphabet), bits)
+        steps, last_shift, last_factor = merge
         for shift, mask, factor in steps:
             acc -= (acc >> shift & mask) * factor
         acc -= (acc >> last_shift) * last_factor
