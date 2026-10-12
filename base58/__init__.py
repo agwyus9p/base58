@@ -10,13 +10,12 @@ with the bitcoin network.
 # This module adds shiny packaging and support for python3.
 
 from hashlib import sha256
-from itertools import product
 
 # typing is only needed by type checkers; importing it at runtime is costly,
 # so annotations using its names are written as strings
 TYPE_CHECKING = False
 if TYPE_CHECKING:
-    from typing import List, Mapping, Optional, Tuple, Union
+    from typing import Mapping, Optional, Tuple, Union
 
 __version__ = '2.1.1'
 
@@ -35,42 +34,6 @@ def scrub_input(v: 'Union[str, bytes]') -> bytes:
         v = v.encode('ascii')
 
     return v
-
-
-def _cached(func):
-    # Small memoiser for the alphabet tables. functools.lru_cache would
-    # import functools (and collections with it) when base58 is imported.
-    cache = {}
-
-    def wrapper(*args):
-        try:
-            return cache[args]
-        except KeyError:
-            if len(cache) >= 128:
-                cache.clear()
-            result = cache[args] = func(*args)
-            return result
-
-    wrapper.cache = cache
-    return wrapper
-
-
-@_cached
-def _get_base58_encode_pairs(alphabet: bytes) -> 'List[bytes]':
-    # pairs[hi * base + lo] is the two character encoding of digits hi, lo.
-    # All pairs are laid out in one string, each followed by a byte that is
-    # not in the alphabet, so a single split cuts out every pair at once.
-    base = len(alphabet)
-    unused = set(range(256)).difference(alphabet)
-    if not base or not unused:
-        return list(map(bytes, product(alphabet, repeat=2)))
-    sep = bytes((min(unused),))
-    count = base * base
-    buf = bytearray(3 * count)
-    buf[0::3] = b''.join([alphabet[d:d + 1] * base for d in range(base)])
-    buf[1::3] = alphabet * base
-    buf[2::3] = sep * count
-    return bytes(buf[:-1]).split(sep)
 
 
 # Encode tables by alphabet, so an encode call needs no tuple key
@@ -114,11 +77,25 @@ def b58encode(
         # (base**4), base**12 and the zero character
         if len(_encode_tables) >= 128:
             _encode_tables.clear()
-        sq = len(alphabet) ** 2
+        base = len(alphabet)
+        sq = base * base
         big = sq * sq
+        # pairs[hi * base + lo] is the two character encoding of digits
+        # hi, lo. All pairs are laid out in one string, each followed by a
+        # byte that is not in the alphabet, so one split cuts out every pair.
+        unused = set(range(256)).difference(alphabet)
+        if not base or not unused:
+            pairs = [bytes((hi, lo)) for hi in alphabet for lo in alphabet]
+        else:
+            sep = bytes((min(unused),))
+            buf = bytearray(3 * sq)
+            buf[0::3] = b''.join(
+                [alphabet[d:d + 1] * base for d in range(base)])
+            buf[1::3] = alphabet * base
+            buf[2::3] = sep * sq
+            pairs = bytes(buf[:-1]).split(sep)
         tables = _encode_tables[alphabet] = (
-            _get_base58_encode_pairs(alphabet), sq, big, big ** 3,
-            alphabet[0:1])
+            pairs, sq, big, big ** 3, alphabet[0:1])
     pairs, sq, big, big3, zero = tables
     parts = []
     while i >= big3:
@@ -147,35 +124,26 @@ def b58encode(
     return zero * (origlen - newlen) + b''.join(parts).lstrip(zero)
 
 
-@_cached
-def _get_base58_decode_map(alphabet: bytes,
-                           autofix: bool) -> 'Mapping[int, int]':
+def _get_base58_decode_table(
+    alphabet: bytes, autofix: bool
+) -> 'Tuple[Mapping[int, int], Optional[bytes]]':
+    # The digit value of each character and a bytes.translate table mapping
+    # each character to its digit value and every invalid character to 255
+    # (None if some digit value does not fit below 255)
     invmap = {char: index for index, char in enumerate(alphabet)}
 
     if autofix:
-        groups = [b'0Oo', b'Il1']
-        for group in groups:
+        for group in (b'0Oo', b'Il1'):
             pivots = [c for c in group if c in invmap]
             if len(pivots) == 1:
                 for alternative in group:
                     invmap[alternative] = invmap[pivots[0]]
 
-    return invmap
-
-
-@_cached
-def _get_base58_decode_table(alphabet: bytes,
-                             autofix: bool) -> 'Tuple[bytes, Optional[bytes]]':
-    # Valid characters and a bytes.translate table mapping each character
-    # to its digit value and every invalid character to 255 (None if some
-    # digit value does not fit below 255)
-    invmap = _get_base58_decode_map(alphabet, autofix)
     if max(invmap.values(), default=0) >= 255:
-        return bytes(invmap), None
-    return bytes(invmap), bytes(invmap.get(c, 255) for c in range(256))
+        return invmap, None
+    return invmap, bytes(invmap.get(c, 255) for c in range(256))
 
 
-@_cached
 def _get_base58_decode_merge(base: int,
                              steps: int) -> 'Tuple[list, int, int]':
     # (shift, mask, factor) for merging byte lanes of 2**steps bytes;
@@ -211,36 +179,21 @@ def b58decode_int(
     """
     if b' ' not in alphabet:
         v = v.rstrip()
+        if len(alphabet) < 256:
+            # Digit values fit a translate table; b58decode strips nothing
+            # more here and merges digits faster
+            return int.from_bytes(
+                b58decode(v, alphabet, autofix=autofix), 'big')
     v = scrub_input(v)
+    invmap = _get_base58_decode_table(alphabet, autofix)[0]
 
-    valid, table = _get_base58_decode_table(alphabet, autofix)
-    if table is None:
-        invalid = v.translate(None, valid)
-        if invalid:
-            raise ValueError("Invalid character {!r}".format(chr(invalid[0])))
-        map = _get_base58_decode_map(alphabet, autofix)
-        digits = [map[char] for char in v]
-    else:
-        # Invalid characters translate to 255, which no digit uses
-        digits = v.translate(table)
-        if 255 in digits:
-            bad = v[digits.index(255)]
-            raise ValueError("Invalid character {!r}".format(chr(bad)))
-        # Every digit sits in its own byte of one big integer. Each step
-        # merges neighbouring lanes, hi * base**h + lo, for all lanes at
-        # once; base < 256 so the merged value always fits its lane.
-        decimal = int.from_bytes(digits, 'big')
-        steps, last_shift, last_factor = _get_base58_decode_merge(
-            len(alphabet), (len(digits) - 1).bit_length())
-        for shift, mask, factor in steps:
-            decimal -= (decimal >> shift & mask) * factor
-        return decimal - (decimal >> last_shift) * last_factor
-
-    # Only alphabets of 256 or more characters get here
+    invalid = v.translate(None, bytes(invmap))
+    if invalid:
+        raise ValueError("Invalid character {!r}".format(chr(invalid[0])))
     decimal = 0
     base = len(alphabet)
-    for d in digits:
-        decimal = decimal * base + d
+    for char in v:
+        decimal = decimal * base + invmap[char]
     return decimal
 
 
@@ -255,7 +208,6 @@ def b58decode(
     if isinstance(v, str):
         v = v.encode('ascii')
 
-    # Same lane merging as b58decode_int, inlined to save a call per decode
     plans = _decode_plans_autofix if autofix else _decode_plans
     plan = plans.get(alphabet)
     if plan is None:
