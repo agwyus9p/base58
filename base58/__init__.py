@@ -40,21 +40,38 @@ def b58encode_int(
     """
     if not i and default_one:
         return alphabet[0:1]
-    string = bytearray()
+    singles, pairs = _get_base58_encode_tables(alphabet)
     base = len(alphabet)
+    pair_base = base * base
     # Peel 5 digits per big-int division; 58**5 fits a single 30-bit
-    # internal digit, so each remainder is split with small-int arithmetic.
-    chunk_base = base ** 5
+    # internal digit, so each remainder is split into a two-digit, a
+    # two-digit and a one-digit piece through cached lookup tables.
+    chunk_base = pair_base * pair_base * base
+    parts = []
+    append = parts.append
     while i >= chunk_base:
         i, rem = divmod(i, chunk_base)
-        for _ in range(5):
-            rem, idx = divmod(rem, base)
-            string.append(alphabet[idx])
-    while i:
-        i, idx = divmod(i, base)
-        string.append(alphabet[idx])
-    string.reverse()
-    return bytes(string)
+        rem, lo = divmod(rem, pair_base)
+        top, mid = divmod(rem, pair_base)
+        append(pairs[lo])
+        append(pairs[mid])
+        append(singles[top])
+    while i >= pair_base:
+        i, lo = divmod(i, pair_base)
+        append(pairs[lo])
+    if i >= base:
+        append(pairs[i])
+    elif i:
+        append(singles[i])
+    parts.reverse()
+    return b''.join(parts)
+
+
+@lru_cache()
+def _get_base58_encode_tables(alphabet: bytes):
+    singles = [bytes((c,)) for c in alphabet]
+    pairs = [bytes((a, b)) for a in alphabet for b in alphabet]
+    return singles, pairs
 
 
 def b58encode(
