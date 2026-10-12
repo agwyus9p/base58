@@ -117,21 +117,23 @@ def b58decode_int(
             "Invalid character {!r}".format(chr(e.args[0]))
         ) from None
 
-    # For long inputs, accumulate chunks of digits in small ints first, so
-    # the big integer is only multiplied once per chunk instead of per digit.
-    chunk = 10
-    chunk_base = base ** chunk
-    head = len(digits) % chunk
-    part = 0
-    for d in digits[:head]:
-        part = part * base + d
-    decimal = part
-    for start in range(head, len(digits), chunk):
-        part = 0
-        for d in digits[start:start + chunk]:
-            part = part * base + d
-        decimal = decimal * chunk_base + part
-    return decimal
+    # For long inputs, combine neighbouring values pairwise. Each pass halves
+    # the number of values and squares the weight of the left value, so the
+    # big multiplications stay balanced instead of growing one digit at a time.
+    # The first pass folds five digits at a time; base ** 5 is still small.
+    digits[:0] = [0] * (-len(digits) % 5)  # leading zeros do not change value
+    groups = iter(digits)
+    digits = [(((a * base + b) * base + c) * base + d) * base + e
+              for a, b, c, d, e in zip(groups, groups, groups, groups, groups)]
+    level_base = base ** 5
+    while len(digits) > 1:
+        if len(digits) % 2:
+            digits.insert(0, 0)  # a leading zero digit does not change value
+        pairs = iter(digits)
+        digits = [hi * level_base + lo for hi, lo in zip(pairs, pairs)]
+        if len(digits) > 1:
+            level_base *= level_base
+    return digits[0]
 
 
 def b58decode(
