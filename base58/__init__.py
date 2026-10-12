@@ -9,12 +9,11 @@ with the bitcoin network.
 # forum post by Gavin Andresen, so direct your praise to him.
 # This module adds shiny packaging and support for python3.
 
-from __future__ import annotations
-
 from hashlib import sha256
 from itertools import product
 
-# typing is only needed by type checkers; importing it at runtime is costly
+# typing is only needed by type checkers; importing it at runtime is costly,
+# so annotations using its names are written as strings
 TYPE_CHECKING = False
 if TYPE_CHECKING:
     from typing import List, Mapping, Optional, Tuple, Union
@@ -31,7 +30,7 @@ XRP_ALPHABET = RIPPLE_ALPHABET
 alphabet = BITCOIN_ALPHABET
 
 
-def scrub_input(v: Union[str, bytes]) -> bytes:
+def scrub_input(v: 'Union[str, bytes]') -> bytes:
     if isinstance(v, str):
         v = v.encode('ascii')
 
@@ -57,7 +56,7 @@ def _cached(func):
 
 
 @_cached
-def _get_base58_encode_pairs(alphabet: bytes) -> List[bytes]:
+def _get_base58_encode_pairs(alphabet: bytes) -> 'List[bytes]':
     # pairs[hi * base + lo] is the two character encoding of digits hi, lo.
     # All pairs are laid out in one string, each followed by a byte that is
     # not in the alphabet, so a single split cuts out every pair at once.
@@ -77,7 +76,7 @@ def _get_base58_encode_pairs(alphabet: bytes) -> List[bytes]:
 @_cached
 def _get_base58_encode_tables(
     alphabet: bytes
-) -> Tuple[List[bytes], int, int, int, bytes]:
+) -> 'Tuple[List[bytes], int, int, int, bytes]':
     # Everything b58encode needs per alphabet: the digit pair table, the
     # pair base (base**2), the divisor (base**4), base**12 and the zero
     # character
@@ -85,6 +84,10 @@ def _get_base58_encode_tables(
     big = sq * sq
     return (_get_base58_encode_pairs(alphabet), sq, big, big ** 3,
             alphabet[0:1])
+
+
+# Encode tables by alphabet, so an encode call needs no tuple key
+_encode_tables = {}
 
 
 def b58encode_int(
@@ -114,7 +117,7 @@ def b58encode_int(
 
 
 def b58encode(
-    v: Union[str, bytes], alphabet: bytes = BITCOIN_ALPHABET
+    v: 'Union[str, bytes]', alphabet: bytes = BITCOIN_ALPHABET
 ) -> bytes:
     """
     Encode a string using Base58
@@ -130,9 +133,11 @@ def b58encode(
 
     # Same digit loop as b58encode_int with default_one=False, inlined to
     # save a call per encode
-    tables = _get_base58_encode_tables.cache.get((alphabet,))
+    tables = _encode_tables.get(alphabet)
     if tables is None:
-        tables = _get_base58_encode_tables(alphabet)
+        if len(_encode_tables) >= 128:
+            _encode_tables.clear()
+        tables = _encode_tables[alphabet] = _get_base58_encode_tables(alphabet)
     pairs, sq, big, big3, zero = tables
     parts = []
     while i >= big3:
@@ -163,7 +168,7 @@ def b58encode(
 
 @_cached
 def _get_base58_decode_map(alphabet: bytes,
-                           autofix: bool) -> Mapping[int, int]:
+                           autofix: bool) -> 'Mapping[int, int]':
     invmap = {char: index for index, char in enumerate(alphabet)}
 
     if autofix:
@@ -179,7 +184,7 @@ def _get_base58_decode_map(alphabet: bytes,
 
 @_cached
 def _get_base58_decode_table(alphabet: bytes,
-                             autofix: bool) -> Tuple[bytes, Optional[bytes]]:
+                             autofix: bool) -> 'Tuple[bytes, Optional[bytes]]':
     # Valid characters and a bytes.translate table mapping each character
     # to its digit value and every invalid character to 255 (None if some
     # digit value does not fit below 255)
@@ -191,7 +196,7 @@ def _get_base58_decode_table(alphabet: bytes,
 
 @_cached
 def _get_base58_decode_steps(base: int,
-                             steps: int) -> List[Tuple[int, int, int]]:
+                             steps: int) -> 'List[Tuple[int, int, int]]':
     # (shift, mask, factor) for merging byte lanes of 2**steps bytes;
     # step j joins lanes of h = 2**j bytes into lanes of 2 * h bytes.
     # A lane holds hi * 256**h + lo and should become hi * base**h + lo,
@@ -207,7 +212,7 @@ def _get_base58_decode_steps(base: int,
 
 @_cached
 def _get_base58_decode_merge(base: int,
-                             steps: int) -> Tuple[list, int, int]:
+                             steps: int) -> 'Tuple[list, int, int]':
     # The merge steps split into all but the last, plus the shift and
     # factor of the last step. The last step joins the two halves of the
     # whole value, so its high half needs no mask.
@@ -234,7 +239,7 @@ _decode_plans_autofix = {}
 
 
 def b58decode_int(
-    v: Union[str, bytes], alphabet: bytes = BITCOIN_ALPHABET, *,
+    v: 'Union[str, bytes]', alphabet: bytes = BITCOIN_ALPHABET, *,
     autofix: bool = False
 ) -> int:
     """
@@ -284,7 +289,7 @@ def b58decode_int(
 
 
 def b58decode(
-    v: Union[str, bytes], alphabet: bytes = BITCOIN_ALPHABET, *,
+    v: 'Union[str, bytes]', alphabet: bytes = BITCOIN_ALPHABET, *,
     autofix: bool = False
 ) -> bytes:
     """
@@ -331,28 +336,30 @@ def b58decode(
 
 
 def b58encode_check(
-    v: Union[str, bytes], alphabet: bytes = BITCOIN_ALPHABET
+    v: 'Union[str, bytes]', alphabet: bytes = BITCOIN_ALPHABET
 ) -> bytes:
     """
     Encode a string using Base58 with a 4 character checksum
     """
-    v = scrub_input(v)
+    if isinstance(v, str):
+        v = v.encode('ascii')
 
     digest = sha256(sha256(v).digest()).digest()
-    return b58encode(v + digest[:4], alphabet=alphabet)
+    return b58encode(v + digest[:4], alphabet)
 
 
 def b58decode_check(
-    v: Union[str, bytes], alphabet: bytes = BITCOIN_ALPHABET, *,
+    v: 'Union[str, bytes]', alphabet: bytes = BITCOIN_ALPHABET, *,
     autofix: bool = False
 ) -> bytes:
     '''Decode and verify the checksum of a Base58 encoded string'''
 
-    result = b58decode(v, alphabet=alphabet, autofix=autofix)
-    result, check = result[:-4], result[-4:]
-    digest = sha256(sha256(result).digest()).digest()
+    result = b58decode(v, alphabet, autofix=autofix)
+    payload = result[:-4]
+    digest = sha256(sha256(payload).digest()).digest()
 
-    if check != digest[:4]:
+    # Results shorter than four bytes can never end with the four byte check
+    if not result.endswith(digest[:4]):
         raise ValueError("Invalid checksum")
 
-    return result
+    return payload
