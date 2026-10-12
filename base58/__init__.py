@@ -205,6 +205,33 @@ def _get_base58_decode_steps(base: int,
     return out
 
 
+@_cached
+def _get_base58_decode_merge(base: int,
+                             steps: int) -> Tuple[list, int, int]:
+    # The merge steps split into all but the last, plus the shift and
+    # factor of the last step. The last step joins the two halves of the
+    # whole value, so its high half needs no mask.
+    if not steps:
+        return [], 0, 0
+    out = _get_base58_decode_steps(base, steps)
+    shift, _, factor = out[-1]
+    return out[:-1], shift, factor
+
+
+@_cached
+def _get_base58_decode_plan(alphabet: bytes, autofix: bool):
+    # The translate table and the merge plans for inputs of up to 2**11
+    # digits, indexed by (len(digits) - 1).bit_length()
+    table = _get_base58_decode_table(alphabet, autofix)[1]
+    if table is None:
+        return None, []
+    base = len(alphabet)
+    return table, [_get_base58_decode_merge(base, s) for s in range(12)]
+
+
+_decode_plans = _get_base58_decode_plan.cache
+
+
 def b58decode_int(
     v: Union[str, bytes], alphabet: bytes = BITCOIN_ALPHABET, *,
     autofix: bool = False
@@ -271,10 +298,10 @@ def b58decode(
     newlen = len(v)
 
     # Same lane merging as b58decode_int, inlined to save a call per decode
-    tables = _get_base58_decode_table.cache.get((alphabet, autofix))
-    if tables is None:
-        tables = _get_base58_decode_table(alphabet, autofix)
-    table = tables[1]
+    plan = _decode_plans.get((alphabet, autofix))
+    if plan is None:
+        plan = _get_base58_decode_plan(alphabet, autofix)
+    table, merges = plan
     if table is None:
         acc = b58decode_int(v, alphabet=alphabet, autofix=autofix)
     else:
@@ -283,12 +310,15 @@ def b58decode(
             bad = v[digits.index(255)]
             raise ValueError("Invalid character {!r}".format(chr(bad)))
         acc = int.from_bytes(digits, 'big')
-        key = (len(alphabet), (len(digits) - 1).bit_length())
-        steps = _get_base58_decode_steps.cache.get(key)
-        if steps is None:
-            steps = _get_base58_decode_steps(*key)
+        bits = (len(digits) - 1).bit_length()
+        if bits < 12:
+            steps, last_shift, last_factor = merges[bits]
+        else:
+            steps, last_shift, last_factor = _get_base58_decode_merge(
+                len(alphabet), bits)
         for shift, mask, factor in steps:
             acc -= (acc >> shift & mask) * factor
+        acc -= (acc >> last_shift) * last_factor
 
     return acc.to_bytes(origlen - newlen + (acc.bit_length() + 7) // 8, 'big')
 
