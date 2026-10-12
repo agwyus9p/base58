@@ -95,11 +95,29 @@ def b58encode(
             buf[2::3] = sep * sq
             pairs = bytes(buf[:-1]).split(sep)
         tables = _encode_tables[alphabet] = (
-            pairs, sq, big, big ** 3, alphabet[0:1])
-    pairs, sq, big, big3, zero = tables
+            pairs, sq, big, big ** 3, big ** 7, alphabet[0:1])
+    pairs, sq, big, big3, big7, zero = tables
     parts = []
-    while i >= big3:
-        # Four groups of four digits per pass while at least four remain
+    while i >= big7:
+        # Eight groups of four digits per pass while at least eight remain
+        i, rem = divmod(i, big)
+        i, rem2 = divmod(i, big)
+        i, rem3 = divmod(i, big)
+        i, rem4 = divmod(i, big)
+        i, rem5 = divmod(i, big)
+        i, rem6 = divmod(i, big)
+        i, rem7 = divmod(i, big)
+        i, rem8 = divmod(i, big)
+        parts += (pairs[rem % sq], pairs[rem // sq],
+                  pairs[rem2 % sq], pairs[rem2 // sq],
+                  pairs[rem3 % sq], pairs[rem3 // sq],
+                  pairs[rem4 % sq], pairs[rem4 // sq],
+                  pairs[rem5 % sq], pairs[rem5 // sq],
+                  pairs[rem6 % sq], pairs[rem6 // sq],
+                  pairs[rem7 % sq], pairs[rem7 // sq],
+                  pairs[rem8 % sq], pairs[rem8 // sq])
+    if i >= big3:
+        # Four to seven groups remain: take four of them
         i, rem = divmod(i, big)
         i, rem2 = divmod(i, big)
         i, rem3 = divmod(i, big)
@@ -121,7 +139,10 @@ def b58encode(
     elif i:
         parts += pairs[i % sq], pairs[i // sq]
     parts.reverse()
-    return zero * (origlen - newlen) + b''.join(parts).lstrip(zero)
+    out = b''.join(parts).lstrip(zero)
+    if origlen == newlen:
+        return out
+    return zero * (origlen - newlen) + out
 
 
 def _get_base58_decode_table(
