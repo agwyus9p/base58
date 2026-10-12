@@ -73,19 +73,6 @@ def _get_base58_encode_pairs(alphabet: bytes) -> 'List[bytes]':
     return bytes(buf[:-1]).split(sep)
 
 
-@_cached
-def _get_base58_encode_tables(
-    alphabet: bytes
-) -> 'Tuple[List[bytes], int, int, int, bytes]':
-    # Everything b58encode needs per alphabet: the digit pair table, the
-    # pair base (base**2), the divisor (base**4), base**12 and the zero
-    # character
-    sq = len(alphabet) ** 2
-    big = sq * sq
-    return (_get_base58_encode_pairs(alphabet), sq, big, big ** 3,
-            alphabet[0:1])
-
-
 # Encode tables by alphabet, so an encode call needs no tuple key
 _encode_tables = {}
 
@@ -98,22 +85,9 @@ def b58encode_int(
     """
     if not i and default_one:
         return alphabet[0:1]
-    base = len(alphabet)
-    # Peel off four digits per big-integer division: base**4 fits in one
-    # internal int digit, so each divmod costs the same as one by base.
-    # The four digits split evenly into two digit pairs, so each group
-    # needs only one more small divmod and two table lookups.
-    # The last group is zero padded; the padding is stripped at the end.
-    sq = base * base
-    big = sq * sq
-    pairs = _get_base58_encode_pairs(alphabet)
-    parts = []
-    while i:
-        i, rem = divmod(i, big)
-        hi, lo = divmod(rem, sq)
-        parts += pairs[lo], pairs[hi]
-    parts.reverse()
-    return b''.join(parts).lstrip(alphabet[0:1])
+    # The big-endian bytes of i have no leading zero bytes, so b58encode
+    # adds no zero characters for them
+    return b58encode(i.to_bytes((i.bit_length() + 7) // 8, 'big'), alphabet)
 
 
 def b58encode(
@@ -131,13 +105,20 @@ def b58encode(
 
     i = int.from_bytes(v, 'big')  # first byte is most significant
 
-    # Same digit loop as b58encode_int with default_one=False, inlined to
-    # save a call per encode
+    # Peel off four digits per big-integer division: base**4 fits in one
+    # internal int digit, so each divmod costs the same as one by base.
+    # The four digits split evenly into two digit pairs, each a table lookup.
     tables = _encode_tables.get(alphabet)
     if tables is None:
+        # The digit pair table, the pair base (base**2), the divisor
+        # (base**4), base**12 and the zero character
         if len(_encode_tables) >= 128:
             _encode_tables.clear()
-        tables = _encode_tables[alphabet] = _get_base58_encode_tables(alphabet)
+        sq = len(alphabet) ** 2
+        big = sq * sq
+        tables = _encode_tables[alphabet] = (
+            _get_base58_encode_pairs(alphabet), sq, big, big ** 3,
+            alphabet[0:1])
     pairs, sq, big, big3, zero = tables
     parts = []
     while i >= big3:
@@ -195,41 +176,24 @@ def _get_base58_decode_table(alphabet: bytes,
 
 
 @_cached
-def _get_base58_decode_steps(base: int,
-                             steps: int) -> 'List[Tuple[int, int, int]]':
+def _get_base58_decode_merge(base: int,
+                             steps: int) -> 'Tuple[list, int, int]':
     # (shift, mask, factor) for merging byte lanes of 2**steps bytes;
     # step j joins lanes of h = 2**j bytes into lanes of 2 * h bytes.
     # A lane holds hi * 256**h + lo and should become hi * base**h + lo,
     # so subtracting hi * (256**h - base**h) merges it in place.
+    # The last step joins the two halves of the whole value, so its high
+    # half needs no mask: it is returned apart as its shift and factor.
     out = []
-    for j in range(steps):
+    for j in range(steps - 1):
         h = 1 << j
         lanes = (b'\0' * h + b'\xff' * h) * ((1 << steps) // (2 * h))
         out.append((8 * h, int.from_bytes(lanes, 'big'),
                     (1 << 8 * h) - base ** h))
-    return out
-
-
-@_cached
-def _get_base58_decode_merge(base: int,
-                             steps: int) -> 'Tuple[list, int, int]':
-    # The merge steps split into all but the last, plus the shift and
-    # factor of the last step. The last step joins the two halves of the
-    # whole value, so its high half needs no mask.
     if not steps:
-        return [], 0, 0
-    out = _get_base58_decode_steps(base, steps)
-    shift, _, factor = out[-1]
-    return out[:-1], shift, factor
-
-
-def _get_base58_decode_plan(alphabet: bytes, autofix: bool):
-    # The zero character, the translate table and slots for the merge
-    # plans of inputs of up to 2**11 digits, indexed by
-    # (len(digits) - 1).bit_length() and filled in on first use
-    zero = alphabet[0:1]
-    table = _get_base58_decode_table(alphabet, autofix)[1]
-    return zero, table, [None] * 12
+        return out, 0, 0
+    h = 1 << steps - 1
+    return out, 8 * h, (1 << 8 * h) - base ** h
 
 
 # Decode plans by alphabet, one dict for each autofix setting, so a decode
@@ -266,25 +230,17 @@ def b58decode_int(
         # merges neighbouring lanes, hi * base**h + lo, for all lanes at
         # once; base < 256 so the merged value always fits its lane.
         decimal = int.from_bytes(digits, 'big')
-        steps = (len(digits) - 1).bit_length()
-        for shift, mask, factor in _get_base58_decode_steps(len(alphabet),
-                                                            steps):
+        steps, last_shift, last_factor = _get_base58_decode_merge(
+            len(alphabet), (len(digits) - 1).bit_length())
+        for shift, mask, factor in steps:
             decimal -= (decimal >> shift & mask) * factor
-        return decimal
+        return decimal - (decimal >> last_shift) * last_factor
 
+    # Only alphabets of 256 or more characters get here
     decimal = 0
     base = len(alphabet)
-    # Accumulate five digits in a small int, then fold them into the
-    # big integer with a single multiply-add.
-    head = len(digits) % 5
-    for d in digits[:head]:
+    for d in digits:
         decimal = decimal * base + d
-    big = base ** 5
-    # zip over one shared iterator yields consecutive groups of five
-    rest = iter(digits[head:])
-    for a, b, c, d, e in zip(rest, rest, rest, rest, rest):
-        decimal = decimal * big + ((((a * base + b) * base + c) * base + d)
-                                   * base + e)
     return decimal
 
 
@@ -305,7 +261,12 @@ def b58decode(
     if plan is None:
         if len(plans) >= 128:
             plans.clear()
-        plan = plans[alphabet] = _get_base58_decode_plan(alphabet, autofix)
+        # The zero character, the translate table and slots for the merge
+        # plans, indexed by (len(digits) - 1).bit_length() (below 64 for
+        # any length) and filled in on first use
+        plan = plans[alphabet] = (
+            alphabet[0:1], _get_base58_decode_table(alphabet, autofix)[1],
+            [None] * 64)
     zero, table, merges = plan
 
     origlen = len(v)
@@ -320,13 +281,10 @@ def b58decode(
             raise ValueError("Invalid character {!r}".format(chr(bad)))
         acc = int.from_bytes(digits, 'big')
         bits = (len(digits) - 1).bit_length()
-        if bits < 12:
-            merge = merges[bits]
-            if merge is None:
-                merge = merges[bits] = _get_base58_decode_merge(
-                    len(alphabet), bits)
-        else:
-            merge = _get_base58_decode_merge(len(alphabet), bits)
+        merge = merges[bits]
+        if merge is None:
+            merge = merges[bits] = _get_base58_decode_merge(
+                len(alphabet), bits)
         steps, last_shift, last_factor = merge
         for shift, mask, factor in steps:
             acc -= (acc >> shift & mask) * factor
